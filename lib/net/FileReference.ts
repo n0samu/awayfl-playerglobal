@@ -6,6 +6,7 @@ import { ASObject } from '@awayfl/avm2';
 import { SecurityDomain } from '../SecurityDomain';
 import { Event } from '../events/Event';
 import { Settings } from '../Settings';
+import { IOErrorEvent } from '../events/IOErrorEvent';
 
 const USE_FILE_PICKER = ('showSaveFilePicker' in self) && Settings.ENABLE_FILE_PICKER;
 
@@ -25,6 +26,8 @@ export class FileReference extends EventDispatcher {
 	private _permissionStatus: string;
 	private _extension: string;
 	private _data: ByteArray;
+
+	private _file: File;
 
 	constructor() {
 		super();
@@ -121,11 +124,18 @@ export class FileReference extends EventDispatcher {
 		const types = [];
 		for (let i = 0; i < typelist.length; i++) {
 			const filter = typelist[i];
-			const extension = filter.extension.slice(filter.extension.lastIndexOf('.'));
-			const mime = extension in knownTypes ? knownTypes[extension]['mime'] : 'application/unknown';
+			const extensions = filter.extension.split(';');
+			filter.extension.slice(filter.extension.lastIndexOf('.'));
+			let mime = 'application/unknown';
+			for (let i = 0; i < extensions.length; i++) {
+				extensions[i] = extensions[i].slice(extensions[i].lastIndexOf('.'));
+				if (extensions[i] in knownTypes) {
+					mime = knownTypes[extensions[i]]['mime'];
+				}
+			}
 			types.push({
 				description: filter.description,
-				accept: { [mime]: extension }
+				accept: { [mime]: extensions }
 			});
 		}
 
@@ -135,7 +145,6 @@ export class FileReference extends EventDispatcher {
 
 		openDialog(options)
 			.then((fileHandler) => {
-				this._sendSelectEvent();
 				return fileHandler[0].getFile();
 			})
 			.then((file) => {
@@ -147,12 +156,8 @@ export class FileReference extends EventDispatcher {
 				const extIndex = file.name.lastIndexOf('.');
 				this.extension = extIndex >= 0 ? file.name.slice(extIndex + 1) : null;
 
-				return file.arrayBuffer();
-			})
-			.then((buf)=>{
-				this.data = new ByteArray(buf.byteLength);
-				this.data.setArrayBuffer(buf);
-				this._sendCompleteEvent();
+				this._file = file;
+				this._sendSelectEvent();
 			})
 			.catch((e: DOMException) => {
 				if (e.code === 20 && e.message === 'The user aborted a request.') {
@@ -174,7 +179,17 @@ export class FileReference extends EventDispatcher {
 
 	//Starts the load of a local file selected by a user.
 	public load() {
-		console.log('load not implemented yet in flash/FileReference');
+		this._sendOpenEvent()
+		// TODO: Stream the file and send ProgressEvents periodically
+		this._file.arrayBuffer()
+			.then((buf)=>{
+				this.data = new ByteArray(buf.byteLength);
+				this.data.setArrayBuffer(buf);
+				this._sendCompleteEvent();
+			})
+			.catch((_e) => {
+				this._sendIoErrorEvent();
+			});
 	}
 
 	//Opens a dialog box that lets the user save a file to the local filesystem.
@@ -268,6 +283,24 @@ export class FileReference extends EventDispatcher {
 
 	private _sendSelectEvent() {
 		const event  = new (<SecurityDomain> this.sec).flash.events.Event(Event.SELECT);
+
+		event.currentTarget = this;
+		event.target = this;
+
+		this.dispatchEvent(event);
+	}
+
+	private _sendOpenEvent() {
+		const event  = new (<SecurityDomain> this.sec).flash.events.Event(Event.OPEN);
+
+		event.currentTarget = this;
+		event.target = this;
+
+		this.dispatchEvent(event);
+	}
+
+	private _sendIoErrorEvent() {
+		const event  = new (<SecurityDomain> this.sec).flash.events.IOErrorEvent(IOErrorEvent.IO_ERROR);
 
 		event.currentTarget = this;
 		event.target = this;
